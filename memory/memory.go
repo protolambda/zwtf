@@ -3,6 +3,7 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"github.com/protolambda/zrnt/eth2/beacon/eth1"
 	"github.com/protolambda/zrnt/eth2/beacon/seeding"
 	"github.com/protolambda/zrnt/eth2/beacon/shuffling"
 	. "github.com/protolambda/zrnt/eth2/core"
@@ -21,6 +22,68 @@ const LatestVotesMemory = 10000
 type BlockPtr uint32
 type AttestationPtr uint32
 type LatestVotesPtr uint32
+
+type FFG struct {
+	Source Gwei
+	Target Gwei
+	Head   Gwei
+}
+
+type ValidatorCounts struct {
+	ActiveValCount      uint32
+	SlashedCount        uint32
+	EligibleValCount    uint32
+	NonEligibleValCount uint32
+	ExitingValCount     uint32
+	WitdrawableValCount uint32
+}
+
+type HeadSummary struct {
+	HeadBlock       BlockPtr
+	Slot            Slot
+	ValidatorCounts ValidatorCounts
+	StakedEth       Gwei // total effective balance of active validators
+	AvgBalance      Gwei
+	DepositIndex    DepositIndex
+	Eth1Data        eth1.Eth1Data
+	ProposerIndex   ValidatorIndex
+	PreviousFFG     FFG
+	CurrentFFG      FFG
+}
+
+func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSummary {
+	fstate := phase0.NewFullFeaturedState(state)
+	fstate.LoadPrecomputedData()
+	currentEpoch := state.CurrentEpoch()
+	summary := new(HeadSummary)
+	summary.HeadBlock = blockPtr
+	for i, v := range state.Validators {
+		if v.IsActive(currentEpoch) {
+			summary.ValidatorCounts.ActiveValCount += 1
+			summary.StakedEth += v.EffectiveBalance
+		} else if v.Slashed {
+			summary.ValidatorCounts.SlashedCount += 1
+		} else if v.ActivationEligibilityEpoch < currentEpoch {
+			summary.ValidatorCounts.NonEligibleValCount += 1
+		} else if v.WithdrawableEpoch > currentEpoch {
+			summary.ValidatorCounts.ExitingValCount += 1
+		} else {
+			summary.ValidatorCounts.WitdrawableValCount += 1
+		}
+		summary.AvgBalance += state.GetBalance(ValidatorIndex(i))
+	}
+	summary.DepositIndex = state.DepositIndex
+	summary.Eth1Data = state.Eth1Data
+	summary.ProposerIndex = fstate.GetBeaconProposerIndex(state.Slot)
+	attesterStatuses := fstate.GetAttesterStatuses()
+	summary.PreviousFFG.Source = fstate.GetAttestersStake(attesterStatuses, PrevSourceAttester|UnslashedAttester)
+	summary.PreviousFFG.Target = fstate.GetAttestersStake(attesterStatuses, PrevTargetAttester|UnslashedAttester)
+	summary.PreviousFFG.Head = fstate.GetAttestersStake(attesterStatuses, PrevHeadAttester|UnslashedAttester)
+	summary.CurrentFFG.Source = fstate.GetAttestersStake(attesterStatuses, CurrSourceAttester|UnslashedAttester)
+	summary.CurrentFFG.Target = fstate.GetAttestersStake(attesterStatuses, CurrTargetAttester|UnslashedAttester)
+	summary.CurrentFFG.Head = fstate.GetAttestersStake(attesterStatuses, CurrHeadAttester|UnslashedAttester)
+	return summary
+}
 
 type BlockSummary struct {
 	HTR    Root
@@ -52,7 +115,7 @@ type MemoryState struct {
 
 type Memory struct {
 	MemoryState
-	HeadBuffer         [HeadsMemory]BlockPtr
+	HeadBuffer         [HeadsMemory]*HeadSummary
 	FinalizedBuffer    [FinalizedMemory]BlockPtr
 	BlocksBuffer       [BlocksMemory]BlockSummary
 	AttestationsBuffer [AttestationsMemory]AttestationSummary
@@ -124,7 +187,7 @@ func (m *MemoryManager) PruneVotes() {
 type MemoryDiff struct {
 	Previous     MemoryState
 	Current      MemoryState
-	Head         []BlockPtr
+	Head         []*HeadSummary
 	Finalized    []BlockPtr
 	Blocks       []BlockSummary
 	Attestations []AttestationSummary
@@ -139,7 +202,7 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 	out := &MemoryDiff{
 		Previous:     pre,
 		Current:      now,
-		Head:         make([]BlockPtr, 0, now.HeadNextPtr-pre.HeadNextPtr),
+		Head:         make([]*HeadSummary, 0, now.HeadNextPtr-pre.HeadNextPtr),
 		Finalized:    make([]BlockPtr, 0, now.FinalizedNextPtr-pre.FinalizedNextPtr),
 		Blocks:       make([]BlockSummary, 0, now.BlocksNextPtr-pre.BlocksNextPtr),
 		Attestations: make([]AttestationSummary, 0, now.AttestationsNextPtr-pre.AttestationsNextPtr),
@@ -236,7 +299,7 @@ func (m *MemoryManager) OnBlockIdentity(root Root, slot Slot, parent Root) Block
 			HTR:    root,
 			Parent: m.blocks[parent], // may still be 0 if parent is unknown
 		}
-		m.currentMemory.BlocksNextPtr = i + 1
+		m.currentMemory.BlocksNextPtr += 1
 		return i
 	}
 }
@@ -281,7 +344,7 @@ func (m *MemoryManager) OnVoteIdentity(index ValidatorIndex, attPtr AttestationP
 			ValidatorIndex: index,
 			AttestationPtr: attPtr,
 		}
-		m.currentMemory.LatestVotesNextPtr = i + 1
+		m.currentMemory.LatestVotesNextPtr += 1
 		return i
 	}
 }
@@ -364,7 +427,7 @@ func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImport
 		Target:    t,
 		Source:    s,
 	}
-	m.currentMemory.AttestationsNextPtr++
+	m.currentMemory.AttestationsNextPtr += 1
 	committee, err := m.GetCommittee(
 		data.Attestation.Data.BeaconBlockRoot,
 		data.Attestation.Data.Slot,
@@ -387,23 +450,23 @@ func (m *MemoryManager) OnRejectAttestation(data *events.BeaconAttestationReject
 }
 
 func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
-	i := m.OnBlockIdentity(data.CurrentHeadBeaconBlockRoot, 0, Root{})
-	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = i
-	m.currentMemory.HeadNextPtr = i
-
 	state, err := m.getState(data.CurrentHeadBeaconBlockRoot)
 	if err != nil {
 		log.Printf("warning: cannot fetch head state for block root %x", data.CurrentHeadBeaconBlockRoot)
 		return
 	}
+
+	i := m.OnBlockIdentity(data.CurrentHeadBeaconBlockRoot, 0, Root{})
+	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = HeadSummaryFromState(state, i)
+	m.currentMemory.HeadNextPtr += 1
+
 	m.headState = state
-	// TODO diff with previous head state, and buffer balance changes, included attestations, etc.
 }
 
 func (m *MemoryManager) OnFinalize(data *events.BeaconFinalization) {
 	i := m.OnBlockIdentity(data.Root, 0, Root{})
 	m.currentMemory.FinalizedBuffer[m.currentMemory.FinalizedNextPtr%FinalizedMemory] = i
-	m.currentMemory.FinalizedNextPtr = i
+	m.currentMemory.FinalizedNextPtr += 1
 
 	state, err := m.getState(data.Root)
 	if err != nil {
