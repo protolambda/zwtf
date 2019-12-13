@@ -7,6 +7,8 @@ import (
 	"github.com/protolambda/zrnt/eth2/beacon/shuffling"
 	. "github.com/protolambda/zrnt/eth2/core"
 	"github.com/protolambda/zrnt/eth2/phase0"
+	"log"
+	"sync"
 	"zwtf/events"
 )
 
@@ -57,7 +59,10 @@ type Memory struct {
 	LatestVotesBuffer  [LatestVotesMemory]VoteSummary
 }
 
-type MemoryUpdater struct {
+type StateGetter func(blockRoot Root) (*phase0.BeaconState, error)
+
+type MemoryManager struct {
+	sync.Mutex
 	lastMemoryDump       MemoryState
 	currentMemory        Memory
 	blocks               map[Root]BlockPtr
@@ -65,9 +70,25 @@ type MemoryUpdater struct {
 	epochCommitteesCache map[Root][SLOTS_PER_EPOCH][MAX_COMMITTEES_PER_SLOT][]ValidatorIndex
 	finalizedState       *phase0.BeaconState
 	headState            *phase0.BeaconState
+	getState             StateGetter
 }
 
-func (m *MemoryUpdater) PruneBlocks() {
+func NewMemoryManager(getState StateGetter) *MemoryManager {
+	return &MemoryManager{
+		lastMemoryDump:       MemoryState{},
+		currentMemory:        Memory{},
+		blocks:               make(map[Root]BlockPtr),
+		votes:                make(map[ValidatorIndex]LatestVotesPtr),
+		epochCommitteesCache: make(map[Root][SLOTS_PER_EPOCH][MAX_COMMITTEES_PER_SLOT][]ValidatorIndex),
+		finalizedState:       nil,
+		headState:            nil,
+		getState:             getState,
+	}
+}
+
+func (m *MemoryManager) PruneBlocks() {
+	m.Lock()
+	defer m.Unlock()
 	pruneBlockPtr := m.currentMemory.BlocksNextPtr
 	if pruneBlockPtr < BlocksMemory {
 		// nothing to prune
@@ -84,7 +105,9 @@ func (m *MemoryUpdater) PruneBlocks() {
 	}
 }
 
-func (m *MemoryUpdater) PruneVotes() {
+func (m *MemoryManager) PruneVotes() {
+	m.Lock()
+	defer m.Unlock()
 	pruneLatestVotePtr := m.currentMemory.LatestVotesNextPtr
 	if pruneLatestVotePtr < LatestVotesMemory {
 		// nothing to prune
@@ -108,7 +131,9 @@ type MemoryDiff struct {
 	LatestVotes  []VoteSummary
 }
 
-func (m *MemoryUpdater) BuildDiff() *MemoryDiff {
+func (m *MemoryManager) BuildDiff() *MemoryDiff {
+	m.Lock()
+	defer m.Unlock()
 	pre := m.lastMemoryDump
 	now := m.currentMemory.MemoryState
 	out := &MemoryDiff{
@@ -172,10 +197,13 @@ func (m *MemoryUpdater) BuildDiff() *MemoryDiff {
 			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[a:b]...)
 		}
 	}
+	m.lastMemoryDump = out.Current
 	return out
 }
 
-func (m *MemoryUpdater) OnEvent(ev *events.Event) {
+func (m *MemoryManager) OnEvent(ev *events.Event) {
+	m.Lock()
+	defer m.Unlock()
 	switch data := ev.Data.(type) {
 	case *events.BeaconBlockImported:
 		m.OnImportBlock(data)
@@ -192,7 +220,7 @@ func (m *MemoryUpdater) OnEvent(ev *events.Event) {
 	}
 }
 
-func (m *MemoryUpdater) OnBlockIdentity(root Root, slot Slot, parent Root) BlockPtr {
+func (m *MemoryManager) OnBlockIdentity(root Root, slot Slot, parent Root) BlockPtr {
 	if i, ok := m.blocks[root]; ok {
 		// backfill summary data
 		if summary := &m.currentMemory.BlocksBuffer[i%BlocksMemory]; summary.Slot == 0 {
@@ -213,7 +241,7 @@ func (m *MemoryUpdater) OnBlockIdentity(root Root, slot Slot, parent Root) Block
 	}
 }
 
-func (m *MemoryUpdater) GetAttestation(attPtr AttestationPtr) *AttestationSummary {
+func (m *MemoryManager) GetAttestation(attPtr AttestationPtr) *AttestationSummary {
 	if attPtr+AttestationsMemory <= m.currentMemory.AttestationsNextPtr {
 		// previous attestation is so outdated that it's not in memory anymore
 		return nil
@@ -221,7 +249,7 @@ func (m *MemoryUpdater) GetAttestation(attPtr AttestationPtr) *AttestationSummar
 	return &m.currentMemory.AttestationsBuffer[attPtr&AttestationsMemory]
 }
 
-func (m *MemoryUpdater) IsOutdatedVote(index ValidatorIndex, attPtr AttestationPtr) bool {
+func (m *MemoryManager) IsOutdatedVote(index ValidatorIndex, attPtr AttestationPtr) bool {
 	prevPtr, ok := m.votes[index]
 	if !ok {
 		// no previous vote
@@ -243,7 +271,7 @@ func (m *MemoryUpdater) IsOutdatedVote(index ValidatorIndex, attPtr AttestationP
 	return prevAtt.Slot < currAtt.Slot
 }
 
-func (m *MemoryUpdater) OnVoteIdentity(index ValidatorIndex, attPtr AttestationPtr) LatestVotesPtr {
+func (m *MemoryManager) OnVoteIdentity(index ValidatorIndex, attPtr AttestationPtr) LatestVotesPtr {
 	if !m.IsOutdatedVote(index, attPtr) {
 		return m.votes[index]
 	} else {
@@ -258,22 +286,17 @@ func (m *MemoryUpdater) OnVoteIdentity(index ValidatorIndex, attPtr AttestationP
 	}
 }
 
-func (m *MemoryUpdater) OnImportBlock(data *events.BeaconBlockImported) {
+func (m *MemoryManager) OnImportBlock(data *events.BeaconBlockImported) {
 	m.OnBlockIdentity(data.BlockRoot, data.Block.Slot, data.Block.ParentRoot)
 	// TODO store block in leveldb?
 }
 
-func (m *MemoryUpdater) OnRejectBlock(data *events.BeaconBlockRejected) {
+func (m *MemoryManager) OnRejectBlock(data *events.BeaconBlockRejected) {
 	// TODO handle rejected blocks?
 }
 
-func (m *MemoryUpdater) GetState(block Root) (*phase0.BeaconState, error) {
-	// TODO http request to fetch SSZ state, deserialize it
-	return nil, nil
-}
-
 // Used to get an earlier block, but after a given slot, as anchor point to get committee data with
-func (m *MemoryUpdater) GetAncestorAtOrAfter(block Root, slot Slot) (Root, error) {
+func (m *MemoryManager) GetAncestorAtOrAfter(block Root, slot Slot) (Root, error) {
 	prevRoot := block
 	i := m.blocks[block]
 	for {
@@ -307,7 +330,7 @@ func NewCommitteeCompute(state *phase0.BeaconState) *CommitteeCompute {
 	return cc
 }
 
-func (m *MemoryUpdater) GetCommittee(block Root, slot Slot, commIndex CommitteeIndex) ([]ValidatorIndex, error) {
+func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeIndex) ([]ValidatorIndex, error) {
 	// try to get the first block that has access to this same committee data
 	committeeAnchorBlock, err := m.GetAncestorAtOrAfter(block, slot.ToEpoch().Previous().GetStartSlot())
 	if err != nil {
@@ -318,7 +341,7 @@ func (m *MemoryUpdater) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 		return cached[slot-slot.ToEpoch().GetStartSlot()][commIndex], nil
 	}
 	// if not in the cache, then get the corresponding state, and fetch the data
-	state, err := m.GetState(committeeAnchorBlock)
+	state, err := m.getState(committeeAnchorBlock)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get state to compute committees from, err: %v", err)
 	}
@@ -329,7 +352,7 @@ func (m *MemoryUpdater) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 	return shufEpoch.Committees[slot-slot.ToEpoch().GetStartSlot()][commIndex], nil
 }
 
-func (m *MemoryUpdater) OnImportAttestation(data *events.BeaconAttestationImported) {
+func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImported) {
 	s := m.OnBlockIdentity(data.Attestation.Data.Source.Root, data.Attestation.Data.Source.Epoch.GetStartSlot(), Root{})
 	t := m.OnBlockIdentity(data.Attestation.Data.Target.Root, data.Attestation.Data.Target.Epoch.GetStartSlot(), Root{})
 	h := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, Root{})
@@ -358,23 +381,34 @@ func (m *MemoryUpdater) OnImportAttestation(data *events.BeaconAttestationImport
 	}
 }
 
-func (m *MemoryUpdater) OnRejectAttestation(data *events.BeaconAttestationRejected) {
+func (m *MemoryManager) OnRejectAttestation(data *events.BeaconAttestationRejected) {
 	//i := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, Root{})
 	// TODO anything on reject?
 }
 
-func (m *MemoryUpdater) OnHeadChange(data *events.BeaconHeadChanged) {
+func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
 	i := m.OnBlockIdentity(data.CurrentHeadBeaconBlockRoot, 0, Root{})
 	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = i
 	m.currentMemory.HeadNextPtr = i
 
-	// TODO get new head state, diff with previous state, and buffer balance changes
+	state, err := m.getState(data.CurrentHeadBeaconBlockRoot)
+	if err != nil {
+		log.Printf("warning: cannot fetch head state for block root %x", data.CurrentHeadBeaconBlockRoot)
+		return
+	}
+	m.headState = state
+	// TODO diff with previous head state, and buffer balance changes, included attestations, etc.
 }
 
-func (m *MemoryUpdater) OnFinalize(data *events.BeaconFinalization) {
+func (m *MemoryManager) OnFinalize(data *events.BeaconFinalization) {
 	i := m.OnBlockIdentity(data.Root, 0, Root{})
 	m.currentMemory.FinalizedBuffer[m.currentMemory.FinalizedNextPtr%FinalizedMemory] = i
 	m.currentMemory.FinalizedNextPtr = i
 
-	// TODO get new finalized state
+	state, err := m.getState(data.Root)
+	if err != nil {
+		log.Printf("warning: cannot fetch finalized state for block root %x", data.Root)
+		return
+	}
+	m.finalizedState = state
 }

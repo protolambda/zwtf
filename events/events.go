@@ -12,7 +12,7 @@ import (
 type BeaconHeadChanged struct {
 	Reorg                      bool
 	CurrentHeadBeaconBlockRoot Root
-	PurrentHeadBeaconBlockRoot Root
+	PreviousHeadBeaconBlockRoot Root
 }
 
 type BeaconFinalization struct {
