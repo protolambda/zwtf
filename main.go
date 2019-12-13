@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var eventsWsAddr = flag.String("events-ws-addr", "localhost:5053", "Event RPC websocket service address")
+var eventsWsAddr = flag.String("events-ws-addr", "localhost:5053", "Event websocket service address")
 
 func main() {
 	flag.Parse()
