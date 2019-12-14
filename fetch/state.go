@@ -2,11 +2,13 @@ package fetch
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"github.com/protolambda/zrnt/eth2/core"
 	"github.com/protolambda/zrnt/eth2/phase0"
 	"github.com/protolambda/zssz"
 	"net/http"
+	"time"
 )
 
 type BeaconAPIFetcher struct {
@@ -53,6 +55,9 @@ func (f *BeaconAPIFetcher) GetBlockByBlockRoot(blockRoot core.Root) (*phase0.Bea
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(req.Context(), 1*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 	req.Header.Add("Accept", "application/ssz")
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -75,6 +80,9 @@ func (f *BeaconAPIFetcher) GetState(stateRoot core.Root) (*phase0.BeaconState, e
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(req.Context(), 1*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 	req.Header.Add("Accept", "application/ssz")
 	resp, err := f.client.Do(req)
 	if err != nil {

@@ -98,6 +98,7 @@ func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSum
 	fstate.LoadPrecomputedData()
 	currentEpoch := state.CurrentEpoch()
 	summary := new(HeadSummary)
+	summary.Slot = state.Slot
 	summary.HeadBlock = blockPtr
 	for i, v := range state.Validators {
 		if v.IsActive(currentEpoch) {
