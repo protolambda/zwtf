@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"log"
-	"net/url"
 	"os"
 	"os/signal"
 	"time"
@@ -15,8 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var eventsWsAddr = flag.String("events-ws-addr", "localhost:5053", "Event websocket address")
-var restHttpAddr = flag.String("rest-http-addr", "localhost:5052", "REST API http address")
+var eventsWs = flag.String("events-ws", "ws://localhost:5053", "Event websocket address")
+var restHttp = flag.String("rest-http", "http://localhost:5052", "REST API http address")
 
 func main() {
 	flag.Parse()
@@ -25,14 +24,14 @@ func main() {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	fetcher := fetch.NewBeaconAPIFetcher(*restHttpAddr)
+	log.Printf("fetching api data from: %s", *restHttp)
+	fetcher := fetch.NewBeaconAPIFetcher(*restHttp)
 
 	memMng := memory.NewMemoryManager(fetcher.GetStateByBlockRoot)
 
-	u := url.URL{Scheme: "ws", Host: *eventsWsAddr, Path: ""}
-	log.Printf("connecting to events websocket: %s", u.String())
+	log.Printf("connecting to events websocket: %s", *eventsWs)
 
-	c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	c, _, err := websocket.DefaultDialer.Dial(*eventsWs, nil)
 	if err != nil {
 		log.Fatal("dial:", err)
 	}
@@ -46,9 +45,8 @@ func main() {
 			_, message, err := c.ReadMessage()
 			if err != nil {
 				log.Println("event ws read error:", err)
-				continue
+				return // TODO try reconnect?
 			}
-			log.Printf("recv: %s", message)
 			var ev events.Event
 			if err := json.Unmarshal(message, &ev); err != nil {
 				log.Println("event decode error:", err)

@@ -30,25 +30,67 @@ type FFG struct {
 }
 
 type ValidatorCounts struct {
-	ActiveValCount      uint32
-	SlashedCount        uint32
-	EligibleValCount    uint32
-	NonEligibleValCount uint32
-	ExitingValCount     uint32
-	WitdrawableValCount uint32
+	Total        uint32
+	Active       uint32
+	Slashed      uint32
+	Eligible     uint32
+	NonEligible  uint32
+	Exiting      uint32
+	Withdrawable uint32
 }
 
 type HeadSummary struct {
 	HeadBlock       BlockPtr
 	Slot            Slot
+	ProposerIndex   ValidatorIndex
 	ValidatorCounts ValidatorCounts
-	StakedEth       Gwei // total effective balance of active validators
+	TotalStaked     Gwei
 	AvgBalance      Gwei
 	DepositIndex    DepositIndex
 	Eth1Data        eth1.Eth1Data
-	ProposerIndex   ValidatorIndex
 	PreviousFFG     FFG
 	CurrentFFG      FFG
+}
+
+func (h *HeadSummary) Display() string {
+	return fmt.Sprintf(`
+----
+slot: %7d   block ptr: %d
+proposer index: %d
+validator counts:
+			  active:  %d
+			 slashed:  %d
+			eligible:  %d
+		 noneligible:  %d
+			 exiting:  %d
+		withdrawable:  %d
+		       total:  %d
+total staked: %10d Gwei
+avg balance:  %10d Gwei
+deposit index: %d
+eth1 data:
+   eth1 block hash: %x
+     deposit count: %d
+      deposit root: %x
+previous epoch ffg:
+   source: %10d Gwei
+   target: %10d Gwei
+   head:   %10d Gwei
+current epoch ffg:
+   source: %10d Gwei
+   target: %10d Gwei
+   head:   %10d Gwei
+----
+`, h.Slot, h.HeadBlock,
+		h.ProposerIndex,
+		h.ValidatorCounts.Active, h.ValidatorCounts.Slashed, h.ValidatorCounts.Eligible,
+		h.ValidatorCounts.NonEligible, h.ValidatorCounts.Exiting, h.ValidatorCounts.Withdrawable,
+		h.ValidatorCounts.Total,
+		h.TotalStaked, h.AvgBalance,
+		h.DepositIndex,
+		h.Eth1Data.BlockHash, h.Eth1Data.DepositCount, h.Eth1Data.DepositRoot,
+		h.PreviousFFG.Source, h.PreviousFFG.Target, h.PreviousFFG.Head,
+		h.CurrentFFG.Source, h.CurrentFFG.Target, h.CurrentFFG.Head)
 }
 
 func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSummary {
@@ -59,19 +101,21 @@ func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSum
 	summary.HeadBlock = blockPtr
 	for i, v := range state.Validators {
 		if v.IsActive(currentEpoch) {
-			summary.ValidatorCounts.ActiveValCount += 1
-			summary.StakedEth += v.EffectiveBalance
+			summary.ValidatorCounts.Active += 1
+			summary.TotalStaked += v.EffectiveBalance
 		} else if v.Slashed {
-			summary.ValidatorCounts.SlashedCount += 1
+			summary.ValidatorCounts.Slashed += 1
 		} else if v.ActivationEligibilityEpoch < currentEpoch {
-			summary.ValidatorCounts.NonEligibleValCount += 1
+			summary.ValidatorCounts.NonEligible += 1
 		} else if v.WithdrawableEpoch > currentEpoch {
-			summary.ValidatorCounts.ExitingValCount += 1
+			summary.ValidatorCounts.Exiting += 1
 		} else {
-			summary.ValidatorCounts.WitdrawableValCount += 1
+			summary.ValidatorCounts.Withdrawable += 1
 		}
 		summary.AvgBalance += state.GetBalance(ValidatorIndex(i))
 	}
+	summary.ValidatorCounts.Total = uint32(len(state.Validators))
+	summary.AvgBalance /= Gwei(len(state.Validators))
 	summary.DepositIndex = state.DepositIndex
 	summary.Eth1Data = state.Eth1Data
 	summary.ProposerIndex = fstate.GetBeaconProposerIndex(state.Slot)
@@ -350,11 +394,13 @@ func (m *MemoryManager) OnVoteIdentity(index ValidatorIndex, attPtr AttestationP
 }
 
 func (m *MemoryManager) OnImportBlock(data *events.BeaconBlockImported) {
+	log.Printf("OnImportBlock! %x %d", data.BlockRoot, data.Block.Slot)
 	m.OnBlockIdentity(data.BlockRoot, data.Block.Slot, data.Block.ParentRoot)
 	// TODO store block in leveldb?
 }
 
 func (m *MemoryManager) OnRejectBlock(data *events.BeaconBlockRejected) {
+	log.Printf("OnRejectBlock: %s", data.Reason)
 	// TODO handle rejected blocks?
 }
 
@@ -362,8 +408,11 @@ func (m *MemoryManager) OnRejectBlock(data *events.BeaconBlockRejected) {
 func (m *MemoryManager) GetAncestorAtOrAfter(block Root, slot Slot) (Root, error) {
 	prevRoot := block
 	i := m.blocks[block]
+	if i == 0 {
+		return prevRoot, nil
+	}
 	for {
-		if i+BlocksMemory >= m.currentMemory.BlocksNextPtr {
+		if i+BlocksMemory <= m.currentMemory.BlocksNextPtr {
 			return Root{}, errors.New("ancestor too old, cannot find it in buffer")
 		}
 		b := &m.currentMemory.BlocksBuffer[i%BlocksMemory]
@@ -394,9 +443,11 @@ func NewCommitteeCompute(state *phase0.BeaconState) *CommitteeCompute {
 }
 
 func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeIndex) ([]ValidatorIndex, error) {
+	log.Printf("Getting committee data for attestation! %x %d %d", block, slot, commIndex)
 	// try to get the first block that has access to this same committee data
 	committeeAnchorBlock, err := m.GetAncestorAtOrAfter(block, slot.ToEpoch().Previous().GetStartSlot())
 	if err != nil {
+		log.Printf("warning: ancestor for attestation is not part of buffered data, fetching state for block itself. Err: %v", err)
 		committeeAnchorBlock = block
 	}
 	// check if we cached it
@@ -404,6 +455,7 @@ func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 		return cached[slot-slot.ToEpoch().GetStartSlot()][commIndex], nil
 	}
 	// if not in the cache, then get the corresponding state, and fetch the data
+	log.Printf("Fetching new state of block %x to compute committee data for attestation! %x %d %d", committeeAnchorBlock, block, slot, commIndex)
 	state, err := m.getState(committeeAnchorBlock)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get state to compute committees from, err: %v", err)
@@ -412,10 +464,12 @@ func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 	committeeCompute := NewCommitteeCompute(state)
 	shufEpoch := committeeCompute.LoadShufflingEpoch(slot.ToEpoch())
 	m.epochCommitteesCache[committeeAnchorBlock] = shufEpoch.Committees
+	log.Printf("Fetched state of block %x and computed and cached committee data for its future epoch %d", committeeAnchorBlock, slot.ToEpoch())
 	return shufEpoch.Committees[slot-slot.ToEpoch().GetStartSlot()][commIndex], nil
 }
 
 func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImported) {
+	log.Printf("OnImportAttestation! %x %d %d", data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, data.Attestation.Data.Index)
 	s := m.OnBlockIdentity(data.Attestation.Data.Source.Root, data.Attestation.Data.Source.Epoch.GetStartSlot(), Root{})
 	t := m.OnBlockIdentity(data.Attestation.Data.Target.Root, data.Attestation.Data.Target.Epoch.GetStartSlot(), Root{})
 	h := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, Root{})
@@ -442,36 +496,45 @@ func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImport
 	for _, vi := range indexedAtt.AttestingIndices {
 		m.OnVoteIdentity(vi, attPtr)
 	}
+	log.Printf("Successfully processed attestation! %x %d %d", data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, data.Attestation.Data.Index)
 }
 
 func (m *MemoryManager) OnRejectAttestation(data *events.BeaconAttestationRejected) {
+	log.Printf("OnRejectAttestation: %s", data.Reason)
 	//i := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, Root{})
 	// TODO anything on reject?
 }
 
 func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
+	log.Printf("OnHeadChange! %x %x %v", data.CurrentHeadBeaconBlockRoot, data.PreviousHeadBeaconBlockRoot, data.Reorg)
 	state, err := m.getState(data.CurrentHeadBeaconBlockRoot)
 	if err != nil {
-		log.Printf("warning: cannot fetch head state for block root %x", data.CurrentHeadBeaconBlockRoot)
+		log.Printf("warning: cannot fetch head state for block root %x: %v", data.CurrentHeadBeaconBlockRoot, err)
 		return
 	}
+	log.Printf("retrieved new head state for slot: %d", state.Slot)
 
 	i := m.OnBlockIdentity(data.CurrentHeadBeaconBlockRoot, 0, Root{})
-	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = HeadSummaryFromState(state, i)
+	headSummary := HeadSummaryFromState(state, i)
+	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = headSummary
 	m.currentMemory.HeadNextPtr += 1
+	log.Println("new head summary:")
+	log.Println(headSummary.Display())
 
 	m.headState = state
 }
 
 func (m *MemoryManager) OnFinalize(data *events.BeaconFinalization) {
+	log.Printf("OnFinalize! %x %d", data.Root, data.Epoch)
 	i := m.OnBlockIdentity(data.Root, 0, Root{})
 	m.currentMemory.FinalizedBuffer[m.currentMemory.FinalizedNextPtr%FinalizedMemory] = i
 	m.currentMemory.FinalizedNextPtr += 1
 
 	state, err := m.getState(data.Root)
 	if err != nil {
-		log.Printf("warning: cannot fetch finalized state for block root %x", data.Root)
+		log.Printf("warning: cannot fetch finalized state for block root %x: %v", data.Root, err)
 		return
 	}
+	log.Printf("retrieved new finalized state for slot: %d", state.Slot)
 	m.finalizedState = state
 }

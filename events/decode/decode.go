@@ -84,7 +84,6 @@ func decodeMap(v map[interface{}]interface{}) map[string]interface{} {
 }
 
 func decodeHook(s reflect.Type, t reflect.Type, data interface{}) (interface{}, error) {
-	fmt.Println(data)
 	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 {
 		return data, nil
 	}
