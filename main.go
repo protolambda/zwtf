@@ -59,6 +59,9 @@ func main() {
 	// TODO: open http api to serve full memory
 	// TODO: open websocket to serve memory diffs
 
+	diffTicker := time.NewTicker(time.Second * 3)
+	defer diffTicker.Stop()
+
 	pruneTicker := time.NewTicker(time.Second * 10)
 	defer pruneTicker.Stop()
 
@@ -66,6 +69,10 @@ func main() {
 		select {
 		case <-done:
 			return
+		case <-diffTicker.C:
+			log.Println("diffing state")
+			diff := memMng.BuildDiff()
+			log.Println(diff.Display())
 		case <-pruneTicker.C:
 			log.Println("pruning old memory")
 			memMng.PruneBlocks()

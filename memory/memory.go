@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/protolambda/zrnt/eth2/beacon/eth1"
@@ -131,9 +132,10 @@ func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSum
 }
 
 type BlockSummary struct {
-	HTR    Root
-	Slot   Slot
-	Parent BlockPtr
+	SelfPtr BlockPtr
+	HTR     Root
+	Slot    Slot
+	Parent  BlockPtr
 }
 
 type AttestationSummary struct {
@@ -239,6 +241,29 @@ type MemoryDiff struct {
 	LatestVotes  []VoteSummary
 }
 
+func (d *MemoryDiff) Display() string {
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("previous state: %v\n", d.Previous))
+	buf.WriteString(fmt.Sprintf("current  state: %v\n", d.Current))
+	for _, h := range d.Head {
+		buf.WriteString(h.Display())
+	}
+	buf.WriteString(fmt.Sprintf("finalized blocks (ptrs): %v\n", d.Finalized))
+	buf.WriteString("--- new blocks ---\n")
+	for _, b := range d.Blocks {
+		buf.WriteString(fmt.Sprintf("block: self: %d, root: %x slot: %d, parent: %d\n",
+			b.SelfPtr, b.HTR, b.Slot, b.Parent))
+	}
+	buf.WriteString("--- new attesations ---\n")
+	for _, a := range d.Attestations {
+		buf.WriteString(fmt.Sprintf("attestation: head: %d, target: %d source: %d, slot: %d, comm index: %d\n",
+			a.Head, a.Target, a.Source, a.Slot, a.CommIndex))
+	}
+	buf.WriteString("--- new votes ---\n")
+	buf.WriteString(fmt.Sprintf("%v\n", d.LatestVotes))
+	return buf.String()
+}
+
 func (m *MemoryManager) BuildDiff() *MemoryDiff {
 	m.Lock()
 	defer m.Unlock()
@@ -340,9 +365,10 @@ func (m *MemoryManager) OnBlockIdentity(root Root, slot Slot, parent Root) Block
 		i = m.currentMemory.BlocksNextPtr
 		m.blocks[root] = i
 		m.currentMemory.BlocksBuffer[i%BlocksMemory] = BlockSummary{
-			Slot:   slot,
-			HTR:    root,
-			Parent: m.blocks[parent], // may still be 0 if parent is unknown
+			SelfPtr: i,
+			Slot:    slot,
+			HTR:     root,
+			Parent:  m.blocks[parent], // may still be 0 if parent is unknown
 		}
 		m.currentMemory.BlocksNextPtr += 1
 		return i
