@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/protolambda/zrnt/eth2/beacon/eth1"
 	"github.com/protolambda/zrnt/eth2/beacon/seeding"
 	"github.com/protolambda/zrnt/eth2/beacon/shuffling"
 	. "github.com/protolambda/zrnt/eth2/core"
@@ -40,6 +39,12 @@ type ValidatorCounts struct {
 	Withdrawable uint32
 }
 
+type Eth1Data struct {
+	DepositRoot  Root
+	DepositCount DepositIndex
+	BlockHash    Root
+}
+
 type HeadSummary struct {
 	HeadBlock       BlockPtr
 	Slot            Slot
@@ -48,7 +53,7 @@ type HeadSummary struct {
 	TotalStaked     Gwei
 	AvgBalance      Gwei
 	DepositIndex    DepositIndex
-	Eth1Data        eth1.Eth1Data
+	Eth1Data        Eth1Data
 	PreviousFFG     FFG
 	CurrentFFG      FFG
 }
@@ -119,7 +124,11 @@ func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSum
 	summary.ValidatorCounts.Total = uint32(len(state.Validators))
 	summary.AvgBalance /= Gwei(len(state.Validators))
 	summary.DepositIndex = state.DepositIndex
-	summary.Eth1Data = state.Eth1Data
+	summary.Eth1Data = Eth1Data{
+		DepositRoot:  state.Eth1Data.DepositRoot,
+		DepositCount: state.Eth1Data.DepositCount,
+		BlockHash:    state.Eth1Data.BlockHash,
+	}
 	summary.ProposerIndex = fstate.GetBeaconProposerIndex(state.Slot)
 	attesterStatuses := fstate.GetAttesterStatuses()
 	summary.PreviousFFG.Source = fstate.GetAttestersStake(attesterStatuses, PrevSourceAttester|UnslashedAttester)
@@ -139,6 +148,7 @@ type BlockSummary struct {
 }
 
 type AttestationSummary struct {
+	SelfPtr   AttestationPtr
 	Slot      Slot
 	CommIndex CommitteeIndex
 	Head      BlockPtr
@@ -174,6 +184,7 @@ type StateGetter func(blockRoot Root) (*phase0.BeaconState, error)
 type MemoryManager struct {
 	sync.Mutex
 	lastMemoryDump       MemoryState
+	nextMemoryDumpIndex  uint64
 	currentMemory        Memory
 	blocks               map[Root]BlockPtr
 	votes                map[ValidatorIndex]LatestVotesPtr
@@ -232,8 +243,8 @@ func (m *MemoryManager) PruneVotes() {
 }
 
 type MemoryDiff struct {
+	DiffIndex    uint64
 	Previous     MemoryState
-	Current      MemoryState
 	Head         []*HeadSummary
 	Finalized    []BlockPtr
 	Blocks       []BlockSummary
@@ -243,8 +254,8 @@ type MemoryDiff struct {
 
 func (d *MemoryDiff) Display() string {
 	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("diff index: %d\n", d.DiffIndex))
 	buf.WriteString(fmt.Sprintf("previous state: %v\n", d.Previous))
-	buf.WriteString(fmt.Sprintf("current  state: %v\n", d.Current))
 	for _, h := range d.Head {
 		buf.WriteString(h.Display())
 	}
@@ -271,13 +282,14 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 	now := m.currentMemory.MemoryState
 	out := &MemoryDiff{
 		Previous:     pre,
-		Current:      now,
+		DiffIndex:    m.nextMemoryDumpIndex,
 		Head:         make([]*HeadSummary, 0, now.HeadNextPtr-pre.HeadNextPtr),
 		Finalized:    make([]BlockPtr, 0, now.FinalizedNextPtr-pre.FinalizedNextPtr),
 		Blocks:       make([]BlockSummary, 0, now.BlocksNextPtr-pre.BlocksNextPtr),
 		Attestations: make([]AttestationSummary, 0, now.AttestationsNextPtr-pre.AttestationsNextPtr),
 		LatestVotes:  make([]VoteSummary, 0, now.LatestVotesNextPtr-pre.LatestVotesNextPtr),
 	}
+	m.nextMemoryDumpIndex += 1
 	// No generics, and easier hardcoded than making MemoryDiff more abstract.
 	// for each buffer: either the diff wraps around, or not
 	{
@@ -330,7 +342,7 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[a:b]...)
 		}
 	}
-	m.lastMemoryDump = out.Current
+	m.lastMemoryDump = now
 	return out
 }
 
@@ -502,6 +514,7 @@ func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImport
 	h := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, Root{})
 	attPtr := m.currentMemory.AttestationsNextPtr
 	m.currentMemory.AttestationsBuffer[attPtr%AttestationsMemory] = AttestationSummary{
+		SelfPtr:   attPtr,
 		Slot:      data.Attestation.Data.Slot,
 		CommIndex: data.Attestation.Data.Index,
 		Head:      h,
