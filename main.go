@@ -73,6 +73,8 @@ func main() {
 			log.Println("diffing state")
 			diff := memMng.BuildDiff()
 			log.Println(diff.Display())
+			out, _ := json.Marshal(&diff)
+			log.Println(string(out))
 		case <-pruneTicker.C:
 			log.Println("pruning old memory")
 			memMng.PruneBlocks()

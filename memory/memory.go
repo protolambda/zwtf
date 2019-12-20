@@ -2,16 +2,31 @@ package memory
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/protolambda/zrnt/eth2/beacon/seeding"
 	"github.com/protolambda/zrnt/eth2/beacon/shuffling"
-	. "github.com/protolambda/zrnt/eth2/core"
+	"github.com/protolambda/zrnt/eth2/core"
 	"github.com/protolambda/zrnt/eth2/phase0"
 	"log"
 	"sync"
 	"zwtf/events"
 )
+
+type Gwei = core.Gwei
+type Slot = core.Slot
+type ValidatorIndex = core.ValidatorIndex
+type DepositIndex = core.DepositIndex
+type CommitteeIndex = core.CommitteeIndex
+
+type Root core.Root
+
+func (r Root) MarshalJSON() (out []byte, _ error) {
+	out = make([]byte, 64, 64)
+	hex.Encode(out, r[:])
+	return
+}
 
 const HeadsMemory = 1000
 const FinalizedMemory = 1000
@@ -24,38 +39,38 @@ type AttestationPtr uint32
 type LatestVotesPtr uint32
 
 type FFG struct {
-	Source Gwei
-	Target Gwei
-	Head   Gwei
+	Source Gwei `json:"source"`
+	Target Gwei `json:"target"`
+	Head   Gwei `json:"head"`
 }
 
 type ValidatorCounts struct {
-	Total        uint32
-	Active       uint32
-	Slashed      uint32
-	Eligible     uint32
-	NonEligible  uint32
-	Exiting      uint32
-	Withdrawable uint32
+	Total        uint32 `json:"total"`
+	Active       uint32 `json:"active"`
+	Slashed      uint32 `json:"slashed"`
+	Eligible     uint32 `json:"eligible"`
+	NonEligible  uint32 `json:"nonEligible"`
+	Exiting      uint32 `json:"exiting"`
+	Withdrawable uint32 `json:"withdrawable"`
 }
 
 type Eth1Data struct {
-	DepositRoot  Root
-	DepositCount DepositIndex
-	BlockHash    Root
+	DepositRoot  Root `json:"depositRoot"`
+	DepositCount DepositIndex `json:"depositCount"`
+	BlockHash    Root `json:"blockHash"`
 }
 
 type HeadSummary struct {
-	HeadBlock       BlockPtr
-	Slot            Slot
-	ProposerIndex   ValidatorIndex
-	ValidatorCounts ValidatorCounts
-	TotalStaked     Gwei
-	AvgBalance      Gwei
-	DepositIndex    DepositIndex
-	Eth1Data        Eth1Data
-	PreviousFFG     FFG
-	CurrentFFG      FFG
+	HeadBlock       BlockPtr `json:"headBlock"`
+	Slot            Slot `json:"slot"`
+	ProposerIndex   ValidatorIndex `json:"proposerIndex"`
+	ValidatorCounts ValidatorCounts `json:"validatorCounts"`
+	TotalStaked     Gwei `json:"totalStaked"`
+	AvgBalance      Gwei `json:"avgBalance"`
+	DepositIndex    DepositIndex `json:"depositIndex"`
+	Eth1Data        Eth1Data `json:"eth1Data"`
+	PreviousFFG     FFG `json:"previousFFG"`
+	CurrentFFG      FFG `json:"currentFFG"`
 }
 
 func (h *HeadSummary) Display() string {
@@ -125,40 +140,40 @@ func HeadSummaryFromState(state *phase0.BeaconState, blockPtr BlockPtr) *HeadSum
 	summary.AvgBalance /= Gwei(len(state.Validators))
 	summary.DepositIndex = state.DepositIndex
 	summary.Eth1Data = Eth1Data{
-		DepositRoot:  state.Eth1Data.DepositRoot,
+		DepositRoot:  Root(state.Eth1Data.DepositRoot),
 		DepositCount: state.Eth1Data.DepositCount,
-		BlockHash:    state.Eth1Data.BlockHash,
+		BlockHash:    Root(state.Eth1Data.BlockHash),
 	}
 	summary.ProposerIndex = fstate.GetBeaconProposerIndex(state.Slot)
 	attesterStatuses := fstate.GetAttesterStatuses()
-	summary.PreviousFFG.Source = fstate.GetAttestersStake(attesterStatuses, PrevSourceAttester|UnslashedAttester)
-	summary.PreviousFFG.Target = fstate.GetAttestersStake(attesterStatuses, PrevTargetAttester|UnslashedAttester)
-	summary.PreviousFFG.Head = fstate.GetAttestersStake(attesterStatuses, PrevHeadAttester|UnslashedAttester)
-	summary.CurrentFFG.Source = fstate.GetAttestersStake(attesterStatuses, CurrSourceAttester|UnslashedAttester)
-	summary.CurrentFFG.Target = fstate.GetAttestersStake(attesterStatuses, CurrTargetAttester|UnslashedAttester)
-	summary.CurrentFFG.Head = fstate.GetAttestersStake(attesterStatuses, CurrHeadAttester|UnslashedAttester)
+	summary.PreviousFFG.Source = fstate.GetAttestersStake(attesterStatuses, core.PrevSourceAttester|core.UnslashedAttester)
+	summary.PreviousFFG.Target = fstate.GetAttestersStake(attesterStatuses, core.PrevTargetAttester|core.UnslashedAttester)
+	summary.PreviousFFG.Head = fstate.GetAttestersStake(attesterStatuses,   core.PrevHeadAttester  |core.UnslashedAttester)
+	summary.CurrentFFG.Source = fstate.GetAttestersStake(attesterStatuses,  core.CurrSourceAttester|core.UnslashedAttester)
+	summary.CurrentFFG.Target = fstate.GetAttestersStake(attesterStatuses,  core.CurrTargetAttester|core.UnslashedAttester)
+	summary.CurrentFFG.Head = fstate.GetAttestersStake(attesterStatuses,    core.CurrHeadAttester  |core.UnslashedAttester)
 	return summary
 }
 
 type BlockSummary struct {
-	SelfPtr BlockPtr
-	HTR     Root
-	Slot    Slot
-	Parent  BlockPtr
+	SelfPtr BlockPtr `json:"selfPtr"`
+	HTR     Root `json:"htr"`
+	Slot    Slot `json:"slot"`
+	Parent  BlockPtr `json:"parent"`
 }
 
 type AttestationSummary struct {
-	SelfPtr   AttestationPtr
-	Slot      Slot
-	CommIndex CommitteeIndex
-	Head      BlockPtr
-	Target    BlockPtr
-	Source    BlockPtr
+	SelfPtr   AttestationPtr `json:"selfPtr"`
+	Slot      Slot `json:"slot"`
+	CommIndex CommitteeIndex `json:"commIndex"`
+	Head      BlockPtr `json:"head"`
+	Target    BlockPtr `json:"target"`
+	Source    BlockPtr `json:"source"`
 }
 
 type VoteSummary struct {
-	ValidatorIndex ValidatorIndex
-	AttestationPtr AttestationPtr
+	ValidatorIndex ValidatorIndex `json:"validatorIndex"`
+	AttestationPtr AttestationPtr `json:"attestationPtr"`
 }
 
 type MemoryState struct {
@@ -188,7 +203,7 @@ type MemoryManager struct {
 	currentMemory        Memory
 	blocks               map[Root]BlockPtr
 	votes                map[ValidatorIndex]LatestVotesPtr
-	epochCommitteesCache map[Root][SLOTS_PER_EPOCH][MAX_COMMITTEES_PER_SLOT][]ValidatorIndex
+	epochCommitteesCache map[Root][core.SLOTS_PER_EPOCH][core.MAX_COMMITTEES_PER_SLOT][]ValidatorIndex
 	finalizedState       *phase0.BeaconState
 	headState            *phase0.BeaconState
 	getState             StateGetter
@@ -200,7 +215,7 @@ func NewMemoryManager(getState StateGetter) *MemoryManager {
 		currentMemory:        Memory{},
 		blocks:               make(map[Root]BlockPtr),
 		votes:                make(map[ValidatorIndex]LatestVotesPtr),
-		epochCommitteesCache: make(map[Root][SLOTS_PER_EPOCH][MAX_COMMITTEES_PER_SLOT][]ValidatorIndex),
+		epochCommitteesCache: make(map[Root][core.SLOTS_PER_EPOCH][core.MAX_COMMITTEES_PER_SLOT][]ValidatorIndex),
 		finalizedState:       nil,
 		headState:            nil,
 		getState:             getState,
@@ -243,13 +258,13 @@ func (m *MemoryManager) PruneVotes() {
 }
 
 type MemoryDiff struct {
-	DiffIndex    uint64
-	Previous     MemoryState
-	Head         []*HeadSummary
-	Finalized    []BlockPtr
-	Blocks       []BlockSummary
-	Attestations []AttestationSummary
-	LatestVotes  []VoteSummary
+	DiffIndex    uint64 `json:"diffIndex"`
+	Previous     MemoryState `json:"previous"`
+	Head         []*HeadSummary `json:"head"`
+	Finalized    []BlockPtr `json:"finalized"`
+	Blocks       []BlockSummary `json:"blocks"`
+	Attestations []AttestationSummary `json:"attestations"`
+	LatestVotes  []VoteSummary `json:"latestVotes"`
 }
 
 func (d *MemoryDiff) Display() string {
@@ -434,7 +449,7 @@ func (m *MemoryManager) OnVoteIdentity(index ValidatorIndex, attPtr AttestationP
 
 func (m *MemoryManager) OnImportBlock(data *events.BeaconBlockImported) {
 	log.Printf("OnImportBlock! %x %d", data.BlockRoot, data.Block.Slot)
-	m.OnBlockIdentity(data.BlockRoot, data.Block.Slot, data.Block.ParentRoot)
+	m.OnBlockIdentity(Root(data.BlockRoot), data.Block.Slot, Root(data.Block.ParentRoot))
 	// TODO store block in leveldb?
 }
 
@@ -509,9 +524,9 @@ func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 
 func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImported) {
 	log.Printf("OnImportAttestation! %x %d %d", data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, data.Attestation.Data.Index)
-	s := m.OnBlockIdentity(data.Attestation.Data.Source.Root, data.Attestation.Data.Source.Epoch.GetStartSlot(), Root{})
-	t := m.OnBlockIdentity(data.Attestation.Data.Target.Root, data.Attestation.Data.Target.Epoch.GetStartSlot(), Root{})
-	h := m.OnBlockIdentity(data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, Root{})
+	s := m.OnBlockIdentity(Root(data.Attestation.Data.Source.Root), data.Attestation.Data.Source.Epoch.GetStartSlot(), Root{})
+	t := m.OnBlockIdentity(Root(data.Attestation.Data.Target.Root), data.Attestation.Data.Target.Epoch.GetStartSlot(), Root{})
+	h := m.OnBlockIdentity(Root(data.Attestation.Data.BeaconBlockRoot), data.Attestation.Data.Slot, Root{})
 	attPtr := m.currentMemory.AttestationsNextPtr
 	m.currentMemory.AttestationsBuffer[attPtr%AttestationsMemory] = AttestationSummary{
 		SelfPtr:   attPtr,
@@ -523,7 +538,7 @@ func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImport
 	}
 	m.currentMemory.AttestationsNextPtr += 1
 	committee, err := m.GetCommittee(
-		data.Attestation.Data.BeaconBlockRoot,
+		Root(data.Attestation.Data.BeaconBlockRoot),
 		data.Attestation.Data.Slot,
 		data.Attestation.Data.Index)
 	if err != nil {
@@ -547,14 +562,14 @@ func (m *MemoryManager) OnRejectAttestation(data *events.BeaconAttestationReject
 
 func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
 	log.Printf("OnHeadChange! %x %x %v", data.CurrentHeadBeaconBlockRoot, data.PreviousHeadBeaconBlockRoot, data.Reorg)
-	state, err := m.getState(data.CurrentHeadBeaconBlockRoot)
+	state, err := m.getState(Root(data.CurrentHeadBeaconBlockRoot))
 	if err != nil {
 		log.Printf("warning: cannot fetch head state for block root %x: %v", data.CurrentHeadBeaconBlockRoot, err)
 		return
 	}
 	log.Printf("retrieved new head state for slot: %d", state.Slot)
 
-	i := m.OnBlockIdentity(data.CurrentHeadBeaconBlockRoot, 0, Root{})
+	i := m.OnBlockIdentity(Root(data.CurrentHeadBeaconBlockRoot), 0, Root{})
 	headSummary := HeadSummaryFromState(state, i)
 	m.currentMemory.HeadBuffer[m.currentMemory.HeadNextPtr%HeadsMemory] = headSummary
 	m.currentMemory.HeadNextPtr += 1
@@ -566,11 +581,11 @@ func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
 
 func (m *MemoryManager) OnFinalize(data *events.BeaconFinalization) {
 	log.Printf("OnFinalize! %x %d", data.Root, data.Epoch)
-	i := m.OnBlockIdentity(data.Root, 0, Root{})
+	i := m.OnBlockIdentity(Root(data.Root), 0, Root{})
 	m.currentMemory.FinalizedBuffer[m.currentMemory.FinalizedNextPtr%FinalizedMemory] = i
 	m.currentMemory.FinalizedNextPtr += 1
 
-	state, err := m.getState(data.Root)
+	state, err := m.getState(Root(data.Root))
 	if err != nil {
 		log.Printf("warning: cannot fetch finalized state for block root %x: %v", data.Root, err)
 		return
