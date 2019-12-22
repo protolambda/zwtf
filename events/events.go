@@ -6,7 +6,7 @@ import (
 	. "github.com/protolambda/zrnt/eth2/beacon/attestations"
 	. "github.com/protolambda/zrnt/eth2/core"
 	. "github.com/protolambda/zrnt/eth2/phase0"
-	"zwtf/events/decode"
+	"github.com/protolambda/zwtf/events/decode"
 )
 
 type BeaconHeadChanged struct {

@@ -9,9 +9,9 @@ import (
 	"github.com/protolambda/zrnt/eth2/beacon/shuffling"
 	"github.com/protolambda/zrnt/eth2/core"
 	"github.com/protolambda/zrnt/eth2/phase0"
+	"github.com/protolambda/zwtf/events"
 	"log"
 	"sync"
-	"zwtf/events"
 )
 
 type Gwei = core.Gwei

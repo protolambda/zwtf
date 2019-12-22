@@ -1,4 +1,4 @@
-module zwtf
+module github.com/protolambda/zwtf
 
 go 1.13
 

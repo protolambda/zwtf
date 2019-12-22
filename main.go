@@ -3,16 +3,21 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"github.com/protolambda/zwtf/events"
+	"github.com/protolambda/zwtf/fetch"
+	"github.com/protolambda/zwtf/memory"
+	"github.com/protolambda/zwtf/server/hub"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
-	"zwtf/events"
-	"zwtf/fetch"
-	"zwtf/memory"
 
 	"github.com/gorilla/websocket"
 )
+
+
+var serverWs = flag.String("serve-addr", ":4000", "serve address")
 
 var eventsWs = flag.String("events-ws", "ws://localhost:5053", "Event websocket address")
 var restHttp = flag.String("rest-http", "http://localhost:5052", "REST API http address")
@@ -37,11 +42,11 @@ func main() {
 	}
 	defer c.Close()
 
-	done := make(chan struct{})
+	doneEvents := make(chan struct{})
 
 	eventsCh := make(chan events.Event)
 	go func() {
-		defer close(done)
+		defer close(doneEvents)
 		for {
 			_, message, err := c.ReadMessage()
 			if err != nil {
@@ -57,8 +62,18 @@ func main() {
 		}
 	}()
 
-	// TODO: open http api to serve full memory
-	// TODO: open websocket to serve memory diffs
+	// This will maintain all client connections, to broadcast diffs to
+	clHub := hub.NewHub()
+
+	// open a little server to provide the websocket endpoint in a browser-friendly way.
+	go func() {
+		httpServer := http.NewServeMux()
+		httpServer.HandleFunc("/ws", clHub.ServeWs)
+		// accept connections
+		if err := http.ListenAndServe(*serverWs, httpServer); err != nil {
+			log.Fatal("client hub server err: ", err)
+		}
+	}()
 
 	diffTicker := time.NewTicker(time.Second * 3)
 	defer diffTicker.Stop()
@@ -68,7 +83,7 @@ func main() {
 
 	for {
 		select {
-		case <-done:
+		case <-doneEvents:
 			return
 		case ev := <-eventsCh:
 			log.Println("processing event: ", ev.Event)
@@ -83,6 +98,7 @@ func main() {
 				log.Println(err)
 			}
 			log.Println(string(out))
+			clHub.Broadcast(out)
 		case <-pruneTicker.C:
 			log.Println("pruning old memory")
 			memMng.PruneBlocks()
@@ -98,7 +114,7 @@ func main() {
 				return
 			}
 			select {
-			case <-done:
+			case <-doneEvents:
 			case <-time.After(time.Second):
 			}
 			return
