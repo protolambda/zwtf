@@ -110,11 +110,11 @@ func (c *Client) WritePump() {
 				return
 			}
 
-			w, err := c.conn.NextWriter(websocket.BinaryMessage)
+			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
 				return
 			}
-			//log.Printf("%x", message)
+			log.Printf("sending msg: %x", message)
 			if _, err := w.Write(message); err != nil {
 				log.Printf("Error when sending msg to client: err: %v", err)
 			}

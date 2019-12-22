@@ -1,10 +1,12 @@
 package hub
 
 import (
+	"context"
 	"github.com/gorilla/websocket"
 	"github.com/protolambda/zwtf/server/client"
 	"log"
 	"net/http"
+	"sync"
 )
 
 // Hub maintains the set of active clients and broadcasts messages to the
@@ -18,13 +20,16 @@ type Hub struct {
 
 	// Unregister requests from clients.
 	unregister chan *client.Client
+
+	ctx context.Context
 }
 
-func NewHub() *Hub {
+func NewHub(ctx context.Context) *Hub {
 	return &Hub{
 		register:   make(chan *client.Client),
 		unregister: make(chan *client.Client),
 		clients:    make(map[*client.Client]bool),
+		ctx: ctx,
 	}
 }
 
@@ -70,6 +75,9 @@ func (h *Hub) ServeWs(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.ctx.Done():
+			h.KickAll()
+			return
 		case c := <-h.register:
 			h.clients[c] = true
 		case c := <-h.unregister:
@@ -81,8 +89,20 @@ func (h *Hub) Run() {
 	}
 }
 
+func (h *Hub) KickAll() {
+	var wg sync.WaitGroup
+	for cl, _ := range h.clients {
+		wg.Add(1)
+		go func(c *client.Client) {
+			c.Close()
+		}(cl)
+	}
+	wg.Done()
+}
+
 func (h *Hub) Broadcast(msg []byte) {
 	for cl, _ := range h.clients {
+		log.Printf("sending msg to client")
 		cl.Send(msg)
 	}
 	return

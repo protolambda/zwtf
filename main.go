@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"github.com/protolambda/zwtf/events"
@@ -62,8 +63,9 @@ func main() {
 		}
 	}()
 
+	hubCtx, closeHub := context.WithCancel(context.Background())
 	// This will maintain all client connections, to broadcast diffs to
-	clHub := hub.NewHub()
+	clHub := hub.NewHub(hubCtx)
 
 	// open a little server to provide the websocket endpoint in a browser-friendly way.
 	go func() {
@@ -74,6 +76,8 @@ func main() {
 			log.Fatal("client hub server err: ", err)
 		}
 	}()
+
+	go clHub.Run()
 
 	diffTicker := time.NewTicker(time.Second * 3)
 	defer diffTicker.Stop()
@@ -105,6 +109,9 @@ func main() {
 			memMng.PruneVotes()
 		case <-interrupt:
 			log.Println("interrupt")
+
+			// close the hub and disconnect the consumer clients
+			closeHub()
 
 			// Cleanly close the connection by sending a close message and then
 			// waiting (with timeout) for the server to close the connection.

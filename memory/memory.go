@@ -181,11 +181,11 @@ type VoteSummary struct {
 
 type MemoryState struct {
 	// ptrs rotate around buffer
-	HeadNextPtr         BlockPtr       // index modulo HeadsMemory
-	FinalizedNextPtr    BlockPtr       // index modulo FinalizedMemory
-	BlocksNextPtr       BlockPtr       // index modulo BlocksMemory
-	AttestationsNextPtr AttestationPtr // index modulo AttestationsMemory
-	LatestVotesNextPtr  LatestVotesPtr // index modulo LatestVotesMemory
+	HeadNextPtr         BlockPtr       `json:"head"` // index modulo HeadsMemory
+	FinalizedNextPtr    BlockPtr       `json:"finalized"` // index modulo FinalizedMemory
+	BlocksNextPtr       BlockPtr       `json:"blocks"` // index modulo BlocksMemory
+	AttestationsNextPtr AttestationPtr `json:"attestations"` // index modulo AttestationsMemory
+	LatestVotesNextPtr  LatestVotesPtr `json:"latestVotes"` // index modulo LatestVotesMemory
 }
 
 type Memory struct {
