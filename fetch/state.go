@@ -55,7 +55,7 @@ func (f *BeaconAPIFetcher) GetBlockByBlockRoot(blockRoot core.Root) (*phase0.Bea
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(req.Context(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(req.Context(), 4*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
 	req.Header.Add("Accept", "application/ssz")
@@ -80,7 +80,7 @@ func (f *BeaconAPIFetcher) GetState(stateRoot core.Root) (*phase0.BeaconState, e
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(req.Context(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(req.Context(), 4*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
 	req.Header.Add("Accept", "application/ssz")

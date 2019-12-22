@@ -22,10 +22,12 @@ type CommitteeIndex = core.CommitteeIndex
 
 type Root core.Root
 
-func (r Root) MarshalJSON() (out []byte, _ error) {
-	out = make([]byte, 64, 64)
-	hex.Encode(out, r[:])
-	return
+func (r *Root) MarshalJSON() ([]byte, error) {
+	out := make([]byte, 64+2, 64+2)
+	out[0] = '"'
+	hex.Encode(out[1:65], r[:])
+	out[65] = '"'
+	return out, nil
 }
 
 const HeadsMemory = 1000
@@ -35,6 +37,7 @@ const AttestationsMemory = 1000
 const LatestVotesMemory = 10000
 
 type BlockPtr uint32
+const EmptyBlockMarker = ^BlockPtr(0)
 type AttestationPtr uint32
 type LatestVotesPtr uint32
 
@@ -194,7 +197,7 @@ type Memory struct {
 	LatestVotesBuffer  [LatestVotesMemory]VoteSummary
 }
 
-type StateGetter func(blockRoot Root) (*phase0.BeaconState, error)
+type StateGetter func(blockRoot core.Root) (*phase0.BeaconState, error)
 
 type MemoryManager struct {
 	sync.Mutex
@@ -311,8 +314,8 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 		a := pre.HeadNextPtr % HeadsMemory
 		b := now.HeadNextPtr % HeadsMemory
 		if b < a {
-			out.Head = append(out.Head, m.currentMemory.HeadBuffer[a:0]...)
-			out.Head = append(out.Head, m.currentMemory.HeadBuffer[0:b]...)
+			out.Head = append(out.Head, m.currentMemory.HeadBuffer[a:]...)
+			out.Head = append(out.Head, m.currentMemory.HeadBuffer[:b]...)
 		} else {
 			out.Head = append(out.Head, m.currentMemory.HeadBuffer[a:b]...)
 		}
@@ -321,8 +324,8 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 		a := pre.FinalizedNextPtr % FinalizedMemory
 		b := now.FinalizedNextPtr % FinalizedMemory
 		if b < a {
-			out.Finalized = append(out.Finalized, m.currentMemory.FinalizedBuffer[a:0]...)
-			out.Finalized = append(out.Finalized, m.currentMemory.FinalizedBuffer[0:b]...)
+			out.Finalized = append(out.Finalized, m.currentMemory.FinalizedBuffer[a:]...)
+			out.Finalized = append(out.Finalized, m.currentMemory.FinalizedBuffer[:b]...)
 		} else {
 			out.Finalized = append(out.Finalized, m.currentMemory.FinalizedBuffer[a:b]...)
 		}
@@ -331,8 +334,8 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 		a := pre.BlocksNextPtr % BlocksMemory
 		b := now.BlocksNextPtr % BlocksMemory
 		if b < a {
-			out.Blocks = append(out.Blocks, m.currentMemory.BlocksBuffer[a:0]...)
-			out.Blocks = append(out.Blocks, m.currentMemory.BlocksBuffer[0:b]...)
+			out.Blocks = append(out.Blocks, m.currentMemory.BlocksBuffer[a:]...)
+			out.Blocks = append(out.Blocks, m.currentMemory.BlocksBuffer[:b]...)
 		} else {
 			out.Blocks = append(out.Blocks, m.currentMemory.BlocksBuffer[a:b]...)
 		}
@@ -341,8 +344,8 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 		a := pre.AttestationsNextPtr % AttestationsMemory
 		b := now.AttestationsNextPtr % AttestationsMemory
 		if b < a {
-			out.Attestations = append(out.Attestations, m.currentMemory.AttestationsBuffer[a:0]...)
-			out.Attestations = append(out.Attestations, m.currentMemory.AttestationsBuffer[0:b]...)
+			out.Attestations = append(out.Attestations, m.currentMemory.AttestationsBuffer[a:]...)
+			out.Attestations = append(out.Attestations, m.currentMemory.AttestationsBuffer[:b]...)
 		} else {
 			out.Attestations = append(out.Attestations, m.currentMemory.AttestationsBuffer[a:b]...)
 		}
@@ -351,8 +354,8 @@ func (m *MemoryManager) BuildDiff() *MemoryDiff {
 		a := pre.LatestVotesNextPtr % LatestVotesMemory
 		b := now.LatestVotesNextPtr % LatestVotesMemory
 		if b < a {
-			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[a:0]...)
-			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[0:b]...)
+			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[a:]...)
+			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[:b]...)
 		} else {
 			out.LatestVotes = append(out.LatestVotes, m.currentMemory.LatestVotesBuffer[a:b]...)
 		}
@@ -391,11 +394,15 @@ func (m *MemoryManager) OnBlockIdentity(root Root, slot Slot, parent Root) Block
 	} else {
 		i = m.currentMemory.BlocksNextPtr
 		m.blocks[root] = i
+		parentBlockPtr, ok := m.blocks[parent]
+		if !ok {
+			parentBlockPtr = EmptyBlockMarker
+		}
 		m.currentMemory.BlocksBuffer[i%BlocksMemory] = BlockSummary{
 			SelfPtr: i,
 			Slot:    slot,
 			HTR:     root,
-			Parent:  m.blocks[parent], // may still be 0 if parent is unknown
+			Parent:  parentBlockPtr,
 		}
 		m.currentMemory.BlocksNextPtr += 1
 		return i
@@ -462,10 +469,10 @@ func (m *MemoryManager) OnRejectBlock(data *events.BeaconBlockRejected) {
 func (m *MemoryManager) GetAncestorAtOrAfter(block Root, slot Slot) (Root, error) {
 	prevRoot := block
 	i := m.blocks[block]
-	if i == 0 {
-		return prevRoot, nil
-	}
 	for {
+		if i == EmptyBlockMarker {
+			return prevRoot, errors.New("buffer not deep enough, cannot find ancestor block")
+		}
 		if i+BlocksMemory <= m.currentMemory.BlocksNextPtr {
 			return Root{}, errors.New("ancestor too old, cannot find it in buffer")
 		}
@@ -506,11 +513,12 @@ func (m *MemoryManager) GetCommittee(block Root, slot Slot, commIndex CommitteeI
 	}
 	// check if we cached it
 	if cached, ok := m.epochCommitteesCache[committeeAnchorBlock]; ok {
+		log.Println("committee cache hit")
 		return cached[slot-slot.ToEpoch().GetStartSlot()][commIndex], nil
 	}
 	// if not in the cache, then get the corresponding state, and fetch the data
 	log.Printf("Fetching new state of block %x to compute committee data for attestation! %x %d %d", committeeAnchorBlock, block, slot, commIndex)
-	state, err := m.getState(committeeAnchorBlock)
+	state, err := m.getState(core.Root(committeeAnchorBlock))
 	if err != nil {
 		return nil, fmt.Errorf("cannot get state to compute committees from, err: %v", err)
 	}
@@ -542,6 +550,7 @@ func (m *MemoryManager) OnImportAttestation(data *events.BeaconAttestationImport
 		data.Attestation.Data.Slot,
 		data.Attestation.Data.Index)
 	if err != nil {
+		log.Printf("Failed to process attestation! %x %d %d err: %v", data.Attestation.Data.BeaconBlockRoot, data.Attestation.Data.Slot, data.Attestation.Data.Index, err)
 		return
 	}
 	indexedAtt, err := data.Attestation.ConvertToIndexed(committee)
@@ -562,7 +571,7 @@ func (m *MemoryManager) OnRejectAttestation(data *events.BeaconAttestationReject
 
 func (m *MemoryManager) OnHeadChange(data *events.BeaconHeadChanged) {
 	log.Printf("OnHeadChange! %x %x %v", data.CurrentHeadBeaconBlockRoot, data.PreviousHeadBeaconBlockRoot, data.Reorg)
-	state, err := m.getState(Root(data.CurrentHeadBeaconBlockRoot))
+	state, err := m.getState(data.CurrentHeadBeaconBlockRoot)
 	if err != nil {
 		log.Printf("warning: cannot fetch head state for block root %x: %v", data.CurrentHeadBeaconBlockRoot, err)
 		return
@@ -585,7 +594,7 @@ func (m *MemoryManager) OnFinalize(data *events.BeaconFinalization) {
 	m.currentMemory.FinalizedBuffer[m.currentMemory.FinalizedNextPtr%FinalizedMemory] = i
 	m.currentMemory.FinalizedNextPtr += 1
 
-	state, err := m.getState(Root(data.Root))
+	state, err := m.getState(data.Root)
 	if err != nil {
 		log.Printf("warning: cannot fetch finalized state for block root %x: %v", data.Root, err)
 		return

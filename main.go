@@ -27,7 +27,7 @@ func main() {
 	log.Printf("fetching api data from: %s", *restHttp)
 	fetcher := fetch.NewBeaconAPIFetcher(*restHttp)
 
-	memMng := memory.NewMemoryManager(fetcher.GetStateByBlockRoot)
+	memMng := memory.NewMemoryManager(memory.StateGetter(fetcher.GetStateByBlockRoot))
 
 	log.Printf("connecting to events websocket: %s", *eventsWs)
 
@@ -39,6 +39,7 @@ func main() {
 
 	done := make(chan struct{})
 
+	eventsCh := make(chan events.Event)
 	go func() {
 		defer close(done)
 		for {
@@ -52,7 +53,7 @@ func main() {
 				log.Println("event decode error:", err)
 				continue
 			}
-			memMng.OnEvent(&ev)
+			eventsCh <- ev
 		}
 	}()
 
@@ -69,11 +70,18 @@ func main() {
 		select {
 		case <-done:
 			return
+		case ev := <-eventsCh:
+			log.Println("processing event: ", ev.Event)
+			memMng.OnEvent(&ev)
+			log.Println("finished processing event: ", ev.Event)
 		case <-diffTicker.C:
 			log.Println("diffing state")
 			diff := memMng.BuildDiff()
-			log.Println(diff.Display())
-			out, _ := json.Marshal(&diff)
+			//log.Println(diff.Display())
+			out, err := json.Marshal(&diff)
+			if err != nil {
+				log.Println(err)
+			}
 			log.Println(string(out))
 		case <-pruneTicker.C:
 			log.Println("pruning old memory")
