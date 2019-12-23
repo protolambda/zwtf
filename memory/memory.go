@@ -214,8 +214,22 @@ type MemoryManager struct {
 
 func NewMemoryManager(getState StateGetter) *MemoryManager {
 	return &MemoryManager{
-		lastMemoryDump:       MemoryState{},
-		currentMemory:        Memory{},
+		lastMemoryDump:       MemoryState{
+			HeadNextPtr:         1,
+			FinalizedNextPtr:    1,
+			BlocksNextPtr:       1,
+			AttestationsNextPtr: 1,
+			LatestVotesNextPtr:  1,
+		},
+		currentMemory:        Memory{
+			MemoryState:        MemoryState{
+				HeadNextPtr:         1,
+				FinalizedNextPtr:    1,
+				BlocksNextPtr:       1,
+				AttestationsNextPtr: 1,
+				LatestVotesNextPtr:  1,
+			},
+		},
 		blocks:               make(map[Root]BlockPtr),
 		votes:                make(map[ValidatorIndex]LatestVotesPtr),
 		epochCommitteesCache: make(map[Root][core.SLOTS_PER_EPOCH][core.MAX_COMMITTEES_PER_SLOT][]ValidatorIndex),
@@ -396,7 +410,7 @@ func (m *MemoryManager) OnBlockIdentity(root Root, slot Slot, parent Root) Block
 		m.blocks[root] = i
 		parentBlockPtr, ok := m.blocks[parent]
 		if !ok {
-			parentBlockPtr = EmptyBlockMarker
+			parentBlockPtr = 0
 		}
 		m.currentMemory.BlocksBuffer[i%BlocksMemory] = BlockSummary{
 			SelfPtr: i,
@@ -470,7 +484,7 @@ func (m *MemoryManager) GetAncestorAtOrAfter(block Root, slot Slot) (Root, error
 	prevRoot := block
 	i := m.blocks[block]
 	for {
-		if i == EmptyBlockMarker {
+		if i == 0 {
 			return prevRoot, errors.New("buffer not deep enough, cannot find ancestor block")
 		}
 		if i+BlocksMemory <= m.currentMemory.BlocksNextPtr {
