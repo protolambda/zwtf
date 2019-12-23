@@ -414,7 +414,7 @@ func (m *MemoryManager) GetAttestation(attPtr AttestationPtr) *AttestationSummar
 		// previous attestation is so outdated that it's not in memory anymore
 		return nil
 	}
-	return &m.currentMemory.AttestationsBuffer[attPtr&AttestationsMemory]
+	return &m.currentMemory.AttestationsBuffer[attPtr%AttestationsMemory]
 }
 
 func (m *MemoryManager) IsOutdatedVote(index ValidatorIndex, attPtr AttestationPtr) bool {
